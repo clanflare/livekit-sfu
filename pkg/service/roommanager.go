@@ -558,6 +558,9 @@ func (r *RoomManager) StartSession(
 	// join room
 	opts := rtc.ParticipantOptions{
 		AutoSubscribe: pi.AutoSubscribe,
+		// decided once from the signed token; frozen for the session so that a
+		// later attribute update cannot change slot accounting
+		IgnoreRoomLimit: rtc.HasIgnoreRoomLimit(pi.Grants),
 	}
 	if pi.AutoSubscribeDataTrack != nil {
 		opts.AutoSubscribeDataTrack = *pi.AutoSubscribeDataTrack

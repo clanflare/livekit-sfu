@@ -174,6 +174,38 @@ func TestRoomJoin(t *testing.T) {
 		err := rm.Join(p, nil, nil, iceServersForRoom)
 		require.Equal(t, ErrMaxParticipantsExceeded, err)
 	})
+
+	t.Run("ignore_room_limit joins a full room", func(t *testing.T) {
+		rm := newRoomWithParticipants(t, testRoomOpts{num: 1})
+		rm.lock.Lock()
+		rm.protoRoom.MaxParticipants = 1
+		rm.lock.Unlock()
+
+		exempt := NewMockParticipant("exempt", types.ProtocolVersion(0), false, false, rm.LocalParticipantListener())
+		require.NoError(t, rm.Join(exempt, nil, &ParticipantOptions{IgnoreRoomLimit: true}, iceServersForRoom))
+	})
+
+	t.Run("ignore_room_limit does not consume a slot", func(t *testing.T) {
+		rm := newRoomWithParticipants(t, testRoomOpts{num: 0})
+		rm.lock.Lock()
+		rm.protoRoom.MaxParticipants = 2
+		rm.lock.Unlock()
+
+		exempt := NewMockParticipant("exempt", types.ProtocolVersion(0), false, false, rm.LocalParticipantListener())
+		require.NoError(t, rm.Join(exempt, nil, &ParticipantOptions{IgnoreRoomLimit: true}, iceServersForRoom))
+
+		first := NewMockParticipant("first", types.ProtocolVersion(0), false, false, rm.LocalParticipantListener())
+		require.NoError(t, rm.Join(first, nil, nil, iceServersForRoom))
+
+		second := NewMockParticipant("second", types.ProtocolVersion(0), false, false, rm.LocalParticipantListener())
+		require.NoError(t, rm.Join(second, nil, nil, iceServersForRoom))
+
+		third := NewMockParticipant("third", types.ProtocolVersion(0), false, false, rm.LocalParticipantListener())
+		require.Equal(t, ErrMaxParticipantsExceeded, rm.Join(third, nil, nil, iceServersForRoom))
+
+		// the reported room count mirrors the limit accounting
+		require.Equal(t, uint32(2), rm.updateProto().NumParticipants)
+	})
 }
 
 // various state changes to participant and that others are receiving update

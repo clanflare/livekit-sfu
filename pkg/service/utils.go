@@ -409,6 +409,11 @@ func ValidateConnectRequest(
 			if v == "" {
 				continue // do not allow deleting existing attributes
 			}
+			if k == rtc.IgnoreRoomLimitAttribute {
+				// reserved for the signed token: never let the client grant
+				// itself an exemption from the room participant limit
+				continue
+			}
 			claims.Attributes[k] = v
 		}
 	}

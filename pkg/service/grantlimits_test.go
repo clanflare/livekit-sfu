@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/livekit/livekit-server/pkg/config"
+	"github.com/livekit/livekit-server/pkg/rtc"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
@@ -149,5 +150,51 @@ func TestConnectLimits(t *testing.T) {
 		_, code, err := ValidateConnectRequest(logger.GetLogger(), grantRequest(g), limit, ValidateConnectRequestParams{}, nil, stubRoomAllocator{})
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, code)
+	})
+}
+
+// The room-limit exemption is only honored from the signed token. A client must not be able to
+// grant it to itself through connect attributes (or overwrite the token's value).
+func TestIgnoreRoomLimitAttributeReservedForToken(t *testing.T) {
+	t.Run("client value cannot override the token", func(t *testing.T) {
+		g := baseGrant()
+		g.Video.SetCanUpdateOwnMetadata(true)
+		g.Attributes = map[string]string{rtc.IgnoreRoomLimitAttribute: "false"}
+
+		params := ValidateConnectRequestParams{
+			attributes: map[string]string{
+				rtc.IgnoreRoomLimitAttribute: "true",
+				"role":                       "host",
+			},
+		}
+		res, code, err := ValidateConnectRequest(logger.GetLogger(), grantRequest(g), config.LimitConfig{}, params, nil, stubRoomAllocator{})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+		require.Equal(t, "false", res.grants.Attributes[rtc.IgnoreRoomLimitAttribute])
+		require.False(t, rtc.HasIgnoreRoomLimit(res.grants))
+		// other attributes still merge as before
+		require.Equal(t, "host", res.grants.Attributes["role"])
+	})
+
+	t.Run("client cannot add it to a token without it", func(t *testing.T) {
+		g := baseGrant()
+		g.Video.SetCanUpdateOwnMetadata(true)
+
+		params := ValidateConnectRequestParams{attributes: map[string]string{rtc.IgnoreRoomLimitAttribute: "true"}}
+		res, code, err := ValidateConnectRequest(logger.GetLogger(), grantRequest(g), config.LimitConfig{}, params, nil, stubRoomAllocator{})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+		require.NotContains(t, res.grants.Attributes, rtc.IgnoreRoomLimitAttribute)
+		require.False(t, rtc.HasIgnoreRoomLimit(res.grants))
+	})
+
+	t.Run("token value is preserved", func(t *testing.T) {
+		g := baseGrant()
+		g.Attributes = map[string]string{rtc.IgnoreRoomLimitAttribute: "true"}
+
+		res, code, err := ValidateConnectRequest(logger.GetLogger(), grantRequest(g), config.LimitConfig{}, ValidateConnectRequestParams{}, nil, stubRoomAllocator{})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, code)
+		require.True(t, rtc.HasIgnoreRoomLimit(res.grants))
 	})
 }

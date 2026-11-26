@@ -158,6 +158,11 @@ type Room struct {
 type ParticipantOptions struct {
 	AutoSubscribe          bool
 	AutoSubscribeDataTrack bool
+	// IgnoreRoomLimit is set for participants whose signed token carries the
+	// ignore_room_limit attribute. They may join a full room and do not count
+	// towards room.MaxParticipants. Frozen at join time on purpose: a later
+	// attribute update must not change a participant's slot accounting.
+	IgnoreRoomLimit bool
 }
 
 type agentDispatch struct {
@@ -457,12 +462,15 @@ func (r *Room) Join(
 	if r.participants[participant.Identity()] != nil {
 		return ErrAlreadyJoined
 	}
-	if r.protoRoom.MaxParticipants > 0 && !participant.IsDependent() {
+	// participants joining with the ignore_room_limit exemption neither consume
+	// a slot nor get rejected when the room is full
+	if r.protoRoom.MaxParticipants > 0 && !participant.IsDependent() && !ignoresRoomLimit(opts) {
 		numParticipants := uint32(0)
-		for _, p := range r.participants {
-			if !p.IsDependent() {
-				numParticipants++
+		for identity, p := range r.participants {
+			if p.IsDependent() || ignoresRoomLimit(r.participantOpts[identity]) {
+				continue
 			}
+			numParticipants++
 		}
 		if numParticipants >= r.protoRoom.MaxParticipants {
 			return ErrMaxParticipantsExceeded
@@ -1593,14 +1601,22 @@ func (r *Room) sendSpeakerChanges(speakers []*livekit.SpeakerInfo) {
 func (r *Room) updateProto() *livekit.Room {
 	r.lock.RLock()
 	room := proto.CloneOf(r.protoRoom)
+	participants := make([]types.Participant, 0, len(r.participants))
+	counted := 0
+	for identity, p := range r.participants {
+		participants = append(participants, p)
+		// agents/egress are never counted, and neither are participants that
+		// joined with the ignore_room_limit exemption, so that the reported
+		// participant count stays consistent with room.MaxParticipants
+		if !p.IsDependent() && !ignoresRoomLimit(r.participantOpts[identity]) {
+			counted++
+		}
+	}
 	r.lock.RUnlock()
 
 	room.NumPublishers = 0
-	room.NumParticipants = 0
-	for _, p := range r.GetParticipants() {
-		if !p.IsDependent() {
-			room.NumParticipants++
-		}
+	room.NumParticipants = uint32(counted)
+	for _, p := range participants {
 		if p.IsPublisher() {
 			room.NumPublishers++
 		}
